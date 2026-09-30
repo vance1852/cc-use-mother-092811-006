@@ -9,11 +9,12 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .errors import DomainError, ValidationError
-from .service import DomainService
+from .risk_api import risk_route
+from .risk_service import RiskService
 from .storage import Database
 
 
-def route(service: DomainService, method: str, path: str, body: dict[str, Any] | None,
+def route(service: RiskService, method: str, path: str, body: dict[str, Any] | None,
           headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
     """把一个 HTTP 语义请求分派到领域服务。"""
 
@@ -21,6 +22,9 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
     body = body or {}
     parsed = urlparse(path)
     actor_id = headers.get("X-Actor-Id", "")
+    risk_result = risk_route(service, method, path, body, headers)
+    if risk_result is not None:
+        return risk_result
     try:
         if method == "GET" and parsed.path == "/health":
             valid, count = service.verify_audit()
@@ -99,7 +103,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     database = Database(args.database)
-    Handler.service = DomainService(database)
+    Handler.service = RiskService(database)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         server.serve_forever()

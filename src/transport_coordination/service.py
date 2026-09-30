@@ -54,6 +54,21 @@ class DomainService:
         if actor.role not in roles:
             raise PermissionDenied("当前角色不能执行该动作")
 
+    def _peek_receipt(self, connection, *, request_id: str, action: str,
+                      payload: dict[str, Any]) -> WriteReceipt | None:
+        """查询幂等回执：命中且一致则返回，命中但内容不同则冲突，未命中返回 None。"""
+
+        request_id = self._identifier(request_id, "request_id")
+        payload_hash = digest(payload)
+        row = connection.execute("SELECT * FROM request_receipts WHERE request_id=?",
+                                 (request_id,)).fetchone()
+        if row:
+            if row["action"] != action or row["payload_hash"] != payload_hash:
+                raise ConflictError("request_id 已被不同内容使用")
+            return WriteReceipt(request_id, row["resource_type"], row["resource_id"], True,
+                                json.loads(row["response_json"]))
+        return None
+
     def _idempotent(self, connection, *, request_id: str, action: str,
                     payload: dict[str, Any], create: Callable[[], tuple[str, str, dict[str, Any]]]) -> WriteReceipt:
         request_id = self._identifier(request_id, "request_id")
@@ -62,14 +77,15 @@ class DomainService:
         if row:
             if row["action"] != action or row["payload_hash"] != payload_hash:
                 raise ConflictError("request_id 已被不同内容使用")
-            return WriteReceipt(request_id, row["resource_type"], row["resource_id"], True)
+            return WriteReceipt(request_id, row["resource_type"], row["resource_id"], True,
+                                json.loads(row["response_json"]))
         resource_type, resource_id, response = create()
         connection.execute(
             "INSERT INTO request_receipts(request_id,action,payload_hash,resource_type,resource_id,response_json,created_at) "
             "VALUES(?,?,?,?,?,?,?)",
             (request_id, action, payload_hash, resource_type, resource_id, canonical_json(response), self._now()),
         )
-        return WriteReceipt(request_id, resource_type, resource_id, False)
+        return WriteReceipt(request_id, resource_type, resource_id, False, response)
 
     def register_organization(self, *, request_id: str, actor_id: str,
                               organization_id: str, name: str) -> WriteReceipt:
