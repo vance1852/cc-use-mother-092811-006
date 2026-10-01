@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 
@@ -34,3 +34,29 @@ class FixedClock:
         """返回固定的 UTC 时间。"""
 
         return self._value
+
+
+class SimulatedClock:
+    """为灾害时间线重放提供可推进的时钟。"""
+
+    def __init__(self, value: datetime) -> None:
+        if value.tzinfo is None:
+            raise ValueError("初始时间必须包含时区")
+        self._value = value.astimezone(timezone.utc)
+
+    def now(self) -> datetime:
+        """返回当前模拟的 UTC 时间。"""
+
+        return self._value
+
+    def advance(self, minutes: int = 0, **kwargs: int) -> None:
+        """按相对时长推进模拟时间。"""
+
+        self._value += timedelta(minutes=minutes, **kwargs)
+
+    def set_to(self, value: datetime) -> None:
+        """把模拟时钟设置到指定时间。"""
+
+        if value.tzinfo is None:
+            raise ValueError("目标时间必须包含时区")
+        self._value = value.astimezone(timezone.utc)

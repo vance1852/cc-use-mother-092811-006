@@ -16,7 +16,7 @@ from .storage import Database
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{1,63}$")
-ROLES = frozenset({"admin", "operator", "reviewer", "auditor"})
+ROLES = frozenset({"admin", "operator", "reviewer", "engineer", "auditor"})
 
 
 class DomainService:
@@ -54,15 +54,28 @@ class DomainService:
         if actor.role not in roles:
             raise PermissionDenied("当前角色不能执行该动作")
 
-    def _idempotent(self, connection, *, request_id: str, action: str,
-                    payload: dict[str, Any], create: Callable[[], tuple[str, str, dict[str, Any]]]) -> WriteReceipt:
+    def _replay_receipt(self, connection, *, request_id: str, action: str,
+                        payload: dict[str, Any]) -> WriteReceipt | None:
+        """如果请求编号已存在则返回回执；内容不一致时报冲突；不存在返回 None。"""
+
         request_id = self._identifier(request_id, "request_id")
         payload_hash = digest(payload)
-        row = connection.execute("SELECT * FROM request_receipts WHERE request_id=?", (request_id,)).fetchone()
+        row = connection.execute("SELECT * FROM request_receipts WHERE request_id=?",
+                                 (request_id,)).fetchone()
         if row:
             if row["action"] != action or row["payload_hash"] != payload_hash:
                 raise ConflictError("request_id 已被不同内容使用")
             return WriteReceipt(request_id, row["resource_type"], row["resource_id"], True)
+        return None
+
+    def _idempotent(self, connection, *, request_id: str, action: str,
+                    payload: dict[str, Any], create: Callable[[], tuple[str, str, dict[str, Any]]]) -> WriteReceipt:
+        replayed = self._replay_receipt(connection, request_id=request_id, action=action,
+                                        payload=payload)
+        if replayed is not None:
+            return replayed
+        request_id = self._identifier(request_id, "request_id")
+        payload_hash = digest(payload)
         resource_type, resource_id, response = create()
         connection.execute(
             "INSERT INTO request_receipts(request_id,action,payload_hash,resource_type,resource_id,response_json,created_at) "
